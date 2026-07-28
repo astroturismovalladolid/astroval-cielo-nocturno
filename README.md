@@ -120,22 +120,87 @@ El backend `cdsapi` solo admite el modo síncrono; el resto del pipeline es idé
 
 ### 1. Credenciales
 
-Crear `$HOME/.ecmwfdatastoresrc` (en Windows, `C:\Users\<usuario>\.ecmwfdatastoresrc`) con el token personal que muestra el CDS al estar logueado:
+El token personal está en el perfil de usuario del CDS, visible al estar logueado. Es un UUID con la forma `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`, sin nada delante.
 
-```
+#### Dónde va el fichero
+
+**En la carpeta de usuario, no en la del proyecto:**
+
+| Sistema | Ruta |
+| --- | --- |
+| Linux | `/home/<usuario>/.ecmwfdatastoresrc` |
+| macOS | `/Users/<usuario>/.ecmwfdatastoresrc` |
+| Windows | `C:\Users\<usuario>\.ecmwfdatastoresrc` |
+
+Si hay dudas sobre cuál es esa carpeta: `echo $HOME` en Linux y macOS, `echo %USERPROFILE%` en el CMD de Windows.
+
+#### Cómo crearlo
+
+Linux y macOS:
+
+```bash
+cat > "$HOME/.ecmwfdatastoresrc" <<'EOF'
 url: https://cds.climate.copernicus.eu/api
 key: <TOKEN-PERSONAL>
+EOF
+chmod 600 "$HOME/.ecmwfdatastoresrc"
 ```
 
-El cliente busca las credenciales en tres sitios, por orden de precedencia: argumentos al construirlo, las variables de entorno `ECMWF_DATASTORES_URL` y `ECMWF_DATASTORES_KEY`, y por último el fichero. Las variables de entorno son la vía cómoda para ejecutar en un servidor o en CI sin dejar el token en disco.
+El `chmod 600` deja el fichero legible solo por su propietario, que es lo apropiado para un credencial.
 
-Si ya tienes un `$HOME/.cdsapirc` de antes (mismo formato), puedes reutilizarlo apuntando la variable de entorno `ECMWF_DATASTORES_RC_FILE` a esa ruta en lugar de duplicar el fichero.
+Windows, desde PowerShell —conviene evitar el Bloc de notas, que tiende a guardar el fichero como `.ecmwfdatastoresrc.txt`:
 
-> **Este fichero nunca debe subirse al repositorio.** Vive fuera del proyecto, en el directorio de usuario.
+```powershell
+@"
+url: https://cds.climate.copernicus.eu/api
+key: <TOKEN-PERSONAL>
+"@ | Set-Content -Path "$env:USERPROFILE\.ecmwfdatastoresrc" -Encoding ascii
+```
+
+> **Este fichero nunca debe subirse al repositorio.** Vive fuera del proyecto, en la carpeta de usuario. El `.gitignore` cubre además `.ecmwfdatastoresrc` y `.cdsapirc` por si acaso.
+
+#### Si ya tienes un `.cdsapirc`
+
+La documentación del CDS describe el fichero clásico `$HOME/.cdsapirc`, de formato idéntico. Si ya lo tienes, o prefieres crearlo con ese nombre, no hace falta duplicarlo: el cliente por defecto no lo busca solo, pero se le puede apuntar.
+
+```bash
+export ECMWF_DATASTORES_RC_FILE="$HOME/.cdsapirc"
+```
+
+La alternativa es usar el cliente clásico, que sí lo lee de forma nativa:
+
+```bash
+python src/download.py --backend cdsapi --start 2024 --end 2024
+```
+
+Es preferible la variable de entorno: mantiene el backend por defecto, que es el que trae el modo asíncrono y las comprobaciones previas.
+
+#### Sin fichero
+
+El cliente busca las credenciales en tres sitios, por orden de precedencia: argumentos al construirlo, las variables de entorno, y por último el fichero. Para ejecutar en un servidor o en CI sin dejar el token en disco:
+
+```bash
+export ECMWF_DATASTORES_URL="https://cds.climate.copernicus.eu/api"
+export ECMWF_DATASTORES_KEY="<TOKEN-PERSONAL>"
+```
 
 ### 2. Términos de uso
 
-Antes de la primera descarga hay que **aceptar manualmente los Términos de Uso del dataset**, al final del formulario de descarga en la web del CDS. Sin ese paso la API falla aunque las credenciales sean correctas. Es la causa más frecuente de error en el primer intento.
+Antes de la primera descarga hay que **aceptar manualmente los Términos de Uso del dataset**, al final del formulario de descarga en la [página de `reanalysis-era5-single-levels`](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels) en la web del CDS.
+
+Este paso no depende del fichero de credenciales y no se puede automatizar. Sin él la API falla aunque el token sea correcto, y es la causa más frecuente de error en el primer intento.
+
+### 3. Comprobar que todo está en su sitio
+
+```bash
+python src/download.py --check-auth
+```
+
+Distingue los tres casos: fichero de credenciales ausente, token rechazado y Términos de Uso sin aceptar. Si responde `Credenciales correctas`, conviene validar el circuito completo con una descarga pequeña antes de lanzar la serie de treinta años:
+
+```bash
+python src/download.py --start 2024 --end 2024 --variables prioritarias
+```
 
 Documentación oficial: https://cds.climate.copernicus.eu/how-to-api · https://ecmwf.github.io/ecmwf-datastores-client/
 
