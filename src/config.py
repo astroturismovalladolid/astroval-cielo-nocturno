@@ -53,3 +53,11 @@ def load_download_config(path: Path | None = None) -> dict:
     """Devuelve la configuración de descarga de config/download.yaml."""
     path = path or CONFIG_DIR / "download.yaml"
     return _load_yaml(path)
+
+
+def load_reference_cities(path: Path | None = None) -> list[dict]:
+    """Ciudades de referencia para orientar el mapa (config/referencias.yaml)."""
+    path = path or CONFIG_DIR / "referencias.yaml"
+    if not path.exists():
+        return []
+    return _load_yaml(path).get("ciudades", [])

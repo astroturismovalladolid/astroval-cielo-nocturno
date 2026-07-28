@@ -72,15 +72,18 @@ astroval-cielo-nocturno/
 ├── config/
 │   ├── sites.yaml             # emplazamientos y coordenadas
 │   ├── thresholds.yaml        # umbrales de las métricas nocturnas
-│   └── download.yaml          # dataset, variables, área y ventana horaria
+│   ├── download.yaml          # dataset, variables, área y ventana horaria
+│   └── referencias.yaml       # capitales de provincia, para situar el mapa
 ├── src/
 │   ├── config.py              # carga de configuración (sites/thresholds/download)
 │   ├── cds.py                 # acceso al CDS, backend intercambiable
 │   ├── jobs.py                # registro de trabajos encolados (modo async)
 │   ├── download.py            # descarga por bloques de años (reanudable)
 │   ├── twilight.py            # crepúsculos astronómicos por fecha y lugar
+│   ├── solar.py               # elevación solar vectorizada, para la rejilla
 │   ├── analyze.py             # umbrales, agregación mensual y anual
-│   └── report.py              # tablas y gráficos
+│   ├── grid.py                # métricas sobre la rejilla completa (mapa)
+│   └── report.py              # tablas, gráficos y mapas
 ├── data/
 │   ├── raw/                   # .nc descargados — NO versionado
 │   └── processed/             # CSV agregados — sí versionado
@@ -227,7 +230,10 @@ python src/analyze.py --site rello
 # Comparativa de todos los emplazamientos
 python src/analyze.py --all
 
-# Generación de tablas y figuras
+# Métricas sobre la rejilla completa (para el mapa regional)
+python src/grid.py
+
+# Generación de tablas, figuras y mapas
 python src/report.py
 ```
 
@@ -255,6 +261,16 @@ Ante cualquier duda —catálogo inaccesible, respuesta con un formato que no re
 
 `--check-auth` valida las credenciales contra la API sin descargar nada. Conviene usarlo antes de una serie larga: si los Términos de Uso del dataset no están aceptados, el script lo señala explícitamente en vez de dejar el error crudo de la API.
 
+### Mapa regional
+
+`analyze.py` responde "¿qué tal este emplazamiento?" tomando la celda más cercana a unas coordenadas, y descarta el resto de la rejilla descargada. `grid.py` responde la otra pregunta —"¿cómo se reparte el cielo por la comunidad?"— evaluando **todas** las celdas del recorte y dejando el resultado en `data/processed/rejilla_metricas.csv`, que `report.py` convierte en mapa.
+
+Es el uso que mejor le sienta a ERA5. Una celda de ~25 km no sirve para elegir entre dos parajes vecinos, pero resuelve con solvencia el gradiente regional entre la vertiente atlántica y los páramos del interior, que es lo que interesa para los informes municipales.
+
+El mapa lleva marcados los emplazamientos de `config/sites.yaml` y las capitales de provincia de `config/referencias.yaml`. Las capitales orientan la lectura y, de paso, señalan los focos de contaminación lumínica: conviene tenerlos a la vista, porque **el mapa solo representa nubosidad**.
+
+Para que la tabla por emplazamientos y el mapa cuenten lo mismo, ambos usan la misma definición de noche. `grid.py` no puede usar `astral` —sería demasiado lento sobre cientos de celdas por decenas de miles de horas—, así que `solar.py` calcula la elevación solar con NumPy; hay una prueba que comprueba que ambos coinciden con menos de 2 minutos de diferencia en el instante del crepúsculo.
+
 ### Tests
 
 ```bash
@@ -262,7 +278,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Cubren el cálculo de crepúsculos (`twilight.py`), la clasificación de noches (`analyze.py`), el registro de trabajos encolados (`jobs.py`) y ambos modos de descarga (`download.py`) con un backend simulado. No requieren credenciales del CDS ni datos descargados.
+Cubren el cálculo de crepúsculos (`twilight.py` y `solar.py`, contrastados entre sí), la clasificación de noches (`analyze.py`), la agregación sobre la rejilla (`grid.py`, contrastada celda a celda con la versión escalar), el registro de trabajos encolados (`jobs.py`) y ambos modos de descarga (`download.py`) con un backend simulado. No requieren credenciales del CDS ni datos descargados.
 
 ---
 
@@ -315,6 +331,7 @@ Conviene tenerlas presentes al interpretar los resultados:
 
 - **Resolución.** Una celda de 0,25° cubre unos 31 km. ERA5 no resuelve nieblas locales, efectos de valle ni contrastes topográficos de pequeña escala. Dos emplazamientos separados por 10 km comparten celda.
 - **Es un reanálisis, no una observación.** Reproduce bien la climatología sinóptica; peor los fenómenos de capa límite, que son justamente los que arruinan noches en fondo de valle.
+- **Solo mide nubes.** No hay oscuridad de cielo ni contaminación lumínica en ERA5. Un emplazamiento puede encabezar la comparativa y ser inservible por el resplandor de un núcleo cercano; el ranking ordena climatología de nubosidad, no calidad de cielo.
 - **No estima el *seeing*.** La turbulencia óptica no se modela; los proxies disponibles son indirectos.
 - **No sustituye a la caracterización in situ.** Cualquier decisión de inversión requiere al menos un año de monitorización real: fotómetro continuo, sensor de nubes, medida de *seeing* y registro de humedad.
 
@@ -340,7 +357,7 @@ Cita del dataset:
 - [ ] Comparativa entre emplazamientos candidatos
 - [ ] Incorporación de variables complementarias
 - [ ] AOD desde CAMS
-- [ ] Mapa provincial de noches aprovechables para los informes municipales
+- [x] Mapa regional de noches aprovechables (`grid.py` + `report.py`)
 - [ ] Validación cruzada con datos de estación de AEMET (Soria, Valladolid/Villanubla)
 
 ---

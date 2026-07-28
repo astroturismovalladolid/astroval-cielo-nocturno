@@ -1,0 +1,18 @@
+# Puntos de referencia para orientarse en el mapa regional.
+#
+# Son las capitales de provincia de Castilla y León. Cumplen doble función:
+# sitúan al lector sobre el mapa y, de paso, señalan los focos de
+# contaminación lumínica —que el mapa NO representa, porque ERA5 solo
+# informa de nubosidad. Conviene tenerlas a la vista para no leer una
+# celda despejada como si fuera un buen cielo sin más.
+
+ciudades:
+  - {nombre: León,       lat: 42.599, lon: -5.567}
+  - {nombre: Burgos,     lat: 42.341, lon: -3.704}
+  - {nombre: Palencia,   lat: 42.009, lon: -4.529}
+  - {nombre: Soria,      lat: 41.764, lon: -2.465}
+  - {nombre: Valladolid, lat: 41.652, lon: -4.724}
+  - {nombre: Zamora,     lat: 41.503, lon: -5.745}
+  - {nombre: Salamanca,  lat: 40.965, lon: -5.664}
+  - {nombre: Segovia,    lat: 40.948, lon: -4.118}
+  - {nombre: Ávila,      lat: 40.656, lon: -4.700}

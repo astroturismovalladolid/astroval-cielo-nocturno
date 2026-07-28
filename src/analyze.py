@@ -226,7 +226,12 @@ def analyze_site(
 
     records = []
     for date in date_range(start_date, end_date):
-        hours = night_hours(site["lat"], site["lon"], date, elevation=site.get("altitude_m") or 0.0)
+        # Sin corrección por altitud: esa corrección modela el hundimiento
+        # del horizonte, que afecta a orto y ocaso, no al crepúsculo
+        # astronómico, definido por la geometría a -18° con independencia
+        # de la altura del observador. Mantenerla al margen hace además que
+        # esta tabla y el mapa de src/grid.py cuenten las mismas noches.
+        hours = night_hours(site["lat"], site["lon"], date)
         hours = clip_to_available_hours(hours, available_hours)
         if not hours:
             continue
