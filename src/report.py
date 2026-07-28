@@ -276,8 +276,10 @@ def plot_map(
     # el eje no ocupa toda la altura y un pie en coordenadas de figura
     # quedaría descolgado muy por debajo.
     ax.annotate(
-        "ERA5 (~25 km de celda) — solo nubosidad. No representa oscuridad del "
-        "cielo, seeing ni horizonte.\n▲ emplazamientos   ● capitales de provincia",
+        "ERA5, rejilla 0,25° (~21 × 28 km); resolución nativa ~31 km, más gruesa "
+        "que la rejilla: léase el gradiente, no la celda.\nSolo nubosidad — no "
+        "representa oscuridad del cielo, seeing ni horizonte.\n"
+        "▲ emplazamientos   ● capitales de provincia",
         xy=(0.5, -0.14), xycoords="axes fraction",
         ha="center", va="top", fontsize=8, color=INK_SECONDARY,
     )

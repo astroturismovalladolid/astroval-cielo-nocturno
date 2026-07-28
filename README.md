@@ -24,7 +24,8 @@ El objetivo operativo es doble:
 | Característica | Valor |
 | --- | --- |
 | Dataset | `reanalysis-era5-single-levels` |
-| Resolución espacial | 0,25° (≈ 31 km) |
+| Rejilla servida | 0,25° (≈ 21 × 28 km a esta latitud) |
+| Resolución nativa del modelo | ≈ 31 km |
 | Resolución temporal | Horaria |
 | Cobertura temporal | Desde 1940 |
 | Formato de descarga | NetCDF4 |
@@ -329,7 +330,11 @@ Las coordenadas pendientes deben verificarse antes de ejecutar el análisis. La 
 
 Conviene tenerlas presentes al interpretar los resultados:
 
-- **Resolución.** Una celda de 0,25° cubre unos 31 km. ERA5 no resuelve nieblas locales, efectos de valle ni contrastes topográficos de pequeña escala. Dos emplazamientos separados por 10 km comparten celda.
+- **Resolución.** El CDS sirve ERA5 en una rejilla de 0,25°, que en Castilla y León son celdas de unos **21 × 28 km** (≈ 580 km²) — el recorte configurado son 400 celdas. ERA5 no resuelve nieblas locales, efectos de valle ni contrastes topográficos de pequeña escala.
+
+  Conviene además no confundir esa rejilla con la resolución real: el modelo que genera ERA5 trabaja a **≈ 31 km**, es decir **más grueso que la rejilla en la que se entrega**. Los valores se interpolan a 0,25°, así que las celdas contiguas no son independientes y el detalle fino del mapa es en buena parte interpolación, no física resuelta. Lo que hay que leer es el **gradiente regional**, no la celda concreta.
+
+  En la práctica esto corta por los dos lados: dos emplazamientos separados 26 km pueden caer en la misma celda —resultados idénticos, indistinguibles—, y dos separados 1 km pueden caer en celdas distintas, con lo que su diferencia es un artefacto de qué lado de una línea arbitraria les tocó. Por eso `analyze.py` registra la `lat_usada`/`lon_usada` de cada emplazamiento: para poder detectar esas colisiones.
 - **Es un reanálisis, no una observación.** Reproduce bien la climatología sinóptica; peor los fenómenos de capa límite, que son justamente los que arruinan noches en fondo de valle.
 - **Solo mide nubes.** No hay oscuridad de cielo ni contaminación lumínica en ERA5. Un emplazamiento puede encabezar la comparativa y ser inservible por el resplandor de un núcleo cercano; el ranking ordena climatología de nubosidad, no calidad de cielo.
 - **No estima el *seeing*.** La turbulencia óptica no se modela; los proxies disponibles son indirectos.
