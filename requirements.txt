@@ -1,4 +1,14 @@
-ecmwf-datastores-client
+# ECMWF advierte que ecmwf-datastores-client está en estado "Incubating":
+# la interfaz es mayormente estable, pero recomiendan fijar una versión
+# publicada en cualquier sistema que dependa de ella. Se permite el rango
+# de parches y se bloquea el salto de minor, que es donde cabría un cambio
+# incompatible. Al subirlo, revisar el modo async de src/download.py.
+ecmwf-datastores-client>=0.5.1,<0.6
+
+# Cliente clásico, aún soportado por el CDS. Necesario solo para
+# 'python src/download.py --backend cdsapi'.
+cdsapi>=0.7.7
+
 xarray
 netCDF4
 pandas

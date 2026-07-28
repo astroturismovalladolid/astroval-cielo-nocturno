@@ -2,25 +2,45 @@
 """Descarga ERA5 (Climate Data Store) por bloques de años, reanudable.
 
 Uso:
+    # Modo síncrono: un bloque cada vez (por defecto)
     python src/download.py --start 1996 --end 2025 --block 3
+
+    # Modo asíncrono: encola varios bloques a la vez y descarga según acaban
+    python src/download.py --start 1996 --end 2025 --block 3 --mode async
+
+    # Comprobar credenciales antes de una descarga larga
+    python src/download.py --check-auth
+
+    # Ver las peticiones sin llamar a la API
     python src/download.py --start 1996 --end 2025 --block 3 --dry-run
 
 Cada bloque de años se descarga a un único fichero NetCDF en data/raw/.
-Si el fichero ya existe (y no está vacío) se omite, así que interrumpir
-y volver a lanzar el script es seguro.
+Si el fichero ya existe (y no está vacío) se omite, así que interrumpir y
+volver a lanzar el script es seguro.
+
+En modo asíncrono, además, los `request_id` de los trabajos encolados se
+guardan en `data/raw/.jobs.json`: al relanzar el script se retoma la espera
+de los que siguen en cola en vez de volver a enviarlos al final de la fila.
+Como las colas del CDS pueden ser de horas, ese modo evita esperar los
+bloques de uno en uno y es el recomendado para descargar la serie completa.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
+import cds
 from config import DATA_RAW_DIR, load_download_config
+from jobs import JobState
 
 
 def year_blocks(start: int, end: int, block: int) -> list[list[int]]:
     """Divide el rango [start, end] (inclusive) en bloques de `block` años."""
+    if block < 1:
+        raise ValueError(f"--block debe ser al menos 1 (recibido {block})")
     if start > end:
         raise ValueError(f"--start ({start}) no puede ser mayor que --end ({end})")
     years = list(range(start, end + 1))
@@ -62,30 +82,169 @@ def variables_for(cfg: dict, which: str) -> list[str]:
     return list(all_vars[which])
 
 
-def download_block(
-    client, dataset: str, request: dict, target: Path, force: bool
-) -> None:
-    if already_downloaded(target) and not force:
-        print(f"[omitido] {target.name} ya existe")
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    print(f"[descargando] {target.name} ({', '.join(request['year'])}) ...")
-    client.retrieve(dataset, request, str(target))
-    print(f"[completado] {target.name}")
+def _report_failure(target_name: str, exc: Exception) -> None:
+    print(f"[fallo] {target_name}: {exc}", file=sys.stderr)
+    if cds.looks_like_terms_error(str(exc)):
+        print(f"         {cds.TERMS_HINT}", file=sys.stderr)
+
+
+def run_sync(backend, dataset: str, plan: list[tuple[Path, dict]], force: bool) -> int:
+    """Descarga bloque a bloque, esperando a cada uno antes del siguiente."""
+    failures = 0
+    for target, request in plan:
+        if already_downloaded(target) and not force:
+            print(f"[omitido] {target.name} ya existe")
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[descargando] {target.name} ({', '.join(request['year'])}) ...")
+        try:
+            backend.retrieve(dataset, request, str(target))
+        except Exception as exc:  # la API señala todos los fallos como excepción
+            _report_failure(target.name, exc)
+            failures += 1
+            continue
+        print(f"[completado] {target.name}")
+    return failures
+
+
+def run_async(
+    backend,
+    dataset: str,
+    plan: list[tuple[Path, dict]],
+    force: bool,
+    output_dir: Path,
+    max_parallel: int,
+    poll_seconds: int,
+) -> int:
+    """Encola hasta `max_parallel` bloques a la vez y descarga según acaban.
+
+    El CDS procesa los trabajos encolados en paralelo, así que enviarlos
+    todos por delante convierte una espera secuencial de N colas en una
+    sola espera solapada.
+    """
+    if not backend.supports_async:
+        raise cds.UnsupportedOperation(
+            f"El backend '{backend.name}' no soporta el modo asíncrono."
+        )
+
+    state = JobState.load(output_dir)
+    pending: dict[str, tuple[Path, dict]] = {}
+    queue = list(plan)
+    failures = 0
+
+    def submit_next() -> None:
+        """Rellena el hueco de trabajos en vuelo hasta max_parallel."""
+        nonlocal failures
+        while queue and len(pending) < max_parallel:
+            target, request = queue.pop(0)
+            if already_downloaded(target) and not force:
+                print(f"[omitido] {target.name} ya existe")
+                continue
+
+            known = state.get(target.name)
+            if known:
+                # Ya estaba encolado en una ejecución anterior: se retoma
+                # en vez de volver a enviarlo al final de la cola.
+                try:
+                    job = backend.get_job(known)
+                except Exception as exc:
+                    print(
+                        f"[aviso] no se pudo retomar {target.name} ({exc}); se reenvía",
+                        file=sys.stderr,
+                    )
+                    state.forget(target.name)
+                    queue.insert(0, (target, request))
+                    continue
+                print(f"[retomado] {target.name} (request {known})")
+            else:
+                try:
+                    job = backend.submit(dataset, request)
+                except Exception as exc:
+                    _report_failure(target.name, exc)
+                    failures += 1
+                    continue
+                state.record(target.name, job.request_id, dataset)
+                state.save()
+                print(f"[encolado] {target.name} (request {job.request_id})")
+
+            pending[target.name] = (target, job)
+
+    submit_next()
+
+    while pending:
+        for target_name in list(pending):
+            target, job = pending[target_name]
+            try:
+                ready = job.ready()
+            except Exception as exc:
+                # El trabajo ha fallado o ha sido rechazado. Se olvida para
+                # que la siguiente ejecución lo reenvíe desde cero.
+                _report_failure(target_name, exc)
+                state.forget(target_name)
+                state.save()
+                del pending[target_name]
+                failures += 1
+                continue
+
+            if not ready:
+                continue
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            print(f"[descargando] {target.name} ...")
+            try:
+                job.download(str(target))
+            except Exception as exc:
+                _report_failure(target_name, exc)
+                failures += 1
+            else:
+                print(f"[completado] {target.name}")
+            state.forget(target_name)
+            state.save()
+            del pending[target_name]
+
+        submit_next()
+        if pending:
+            time.sleep(poll_seconds)
+
+    return failures
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--start", type=int, required=True, help="Primer año (inclusive)")
-    parser.add_argument("--end", type=int, required=True, help="Último año (inclusive)")
+    parser.add_argument("--start", type=int, help="Primer año (inclusive)")
+    parser.add_argument("--end", type=int, help="Último año (inclusive)")
     parser.add_argument(
         "--block", type=int, default=3, help="Tamaño del bloque de años (default: 3)"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["sync", "async"],
+        default="sync",
+        help="sync: un bloque cada vez. async: encola varios a la vez (default: sync)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=cds.BACKENDS,
+        default=cds.DATASTORES,
+        help=f"Cliente del CDS a usar (default: {cds.DATASTORES})",
     )
     parser.add_argument(
         "--variables",
         choices=["all", "prioritarias", "complementarias"],
         default="all",
         help="Grupo de variables a descargar (default: all)",
+    )
+    parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=4,
+        help="Trabajos encolados a la vez en modo async (default: 4)",
+    )
+    parser.add_argument(
+        "--poll-seconds",
+        type=int,
+        default=60,
+        help="Segundos entre comprobaciones de estado en modo async (default: 60)",
     )
     parser.add_argument(
         "--output-dir", type=Path, default=None, help="Directorio de salida (default: data/raw)"
@@ -95,44 +254,101 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force", action="store_true", help="Vuelve a descargar aunque el fichero ya exista"
     )
     parser.add_argument(
+        "--check-auth",
+        action="store_true",
+        help="Comprueba las credenciales contra la API y termina",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Muestra las peticiones sin llamar a la API del CDS",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    if not args.check_auth and (args.start is None or args.end is None):
+        parser.error("--start y --end son obligatorios salvo con --check-auth")
+    if args.max_parallel < 1:
+        parser.error("--max-parallel debe ser al menos 1")
+
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    cfg = load_download_config(args.config)
-    output_dir = args.output_dir or DATA_RAW_DIR
-    variables = variables_for(cfg, args.variables)
 
-    blocks = year_blocks(args.start, args.end, args.block)
-
-    client = None
-    if not args.dry_run:
+    if args.check_auth:
         try:
-            from ecmwf.datastores import Client
-        except ImportError:
+            backend = cds.get_backend(args.backend)
+            backend.check_authentication()
+        except (ImportError, cds.UnsupportedOperation) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        except FileNotFoundError as exc:
             print(
-                "ecmwf-datastores-client no está instalado. Ejecuta "
-                "'pip install ecmwf-datastores-client' o usa --dry-run para ver "
-                "las peticiones sin descargar.",
+                f"No hay fichero de credenciales ({exc.filename}). Créalo con el "
+                "token personal que muestra el CDS al estar logueado; ver la "
+                "sección 'Configuración' del README.",
                 file=sys.stderr,
             )
             return 1
-        client = Client()
+        except Exception as exc:
+            print(f"Credenciales rechazadas: {exc}", file=sys.stderr)
+            if cds.looks_like_terms_error(str(exc)):
+                print(cds.TERMS_HINT, file=sys.stderr)
+            return 1
+        print("Credenciales correctas.")
+        return 0
 
-    for years in blocks:
-        request = build_request(cfg, years, variables)
-        target = target_path(output_dir, years, args.variables)
-        if args.dry_run:
+    cfg = load_download_config(args.config)
+    output_dir = args.output_dir or DATA_RAW_DIR
+    try:
+        variables = variables_for(cfg, args.variables)
+        blocks = year_blocks(args.start, args.end, args.block)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    plan = [
+        (target_path(output_dir, years, args.variables), build_request(cfg, years, variables))
+        for years in blocks
+    ]
+
+    if args.dry_run:
+        for target, request in plan:
             print(f"[dry-run] {target} <- {request}")
-            continue
-        download_block(client, cfg["dataset"], request, target, args.force)
+        return 0
 
-    return 0
+    try:
+        backend = cds.get_backend(args.backend)
+    except ImportError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    try:
+        if args.mode == "async":
+            failures = run_async(
+                backend,
+                cfg["dataset"],
+                plan,
+                args.force,
+                output_dir,
+                args.max_parallel,
+                args.poll_seconds,
+            )
+        else:
+            failures = run_sync(backend, cfg["dataset"], plan, args.force)
+    except cds.UnsupportedOperation as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print(
+            "\nInterrumpido. Los trabajos ya encolados siguen en la cola del CDS; "
+            "relanza el script para retomarlos.",
+            file=sys.stderr,
+        )
+        return 130
+
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

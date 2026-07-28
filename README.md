@@ -75,6 +75,8 @@ astroval-cielo-nocturno/
 │   └── download.yaml          # dataset, variables, área y ventana horaria
 ├── src/
 │   ├── config.py              # carga de configuración (sites/thresholds/download)
+│   ├── cds.py                 # acceso al CDS, backend intercambiable
+│   ├── jobs.py                # registro de trabajos encolados (modo async)
 │   ├── download.py            # descarga por bloques de años (reanudable)
 │   ├── twilight.py            # crepúsculos astronómicos por fecha y lugar
 │   ├── analyze.py             # umbrales, agregación mensual y anual
@@ -95,10 +97,22 @@ astroval-cielo-nocturno/
 - Cuenta en el [Climate Data Store](https://cds.climate.copernicus.eu)
 
 ```bash
-pip install ecmwf-datastores-client xarray netCDF4 pandas numpy astral matplotlib pyyaml
+pip install -r requirements.txt
 ```
 
-La descarga usa [`ecmwf-datastores-client`](https://github.com/ecmwf/ecmwf-datastores-client), el cliente Python oficial de ECMWF para la API de Data Stores (CDS incluido), sucesor de `cdsapi`. La petición y el método `retrieve()` son equivalentes a los de `cdsapi`, solo cambia el paquete y el fichero de credenciales.
+### Cliente del CDS
+
+La descarga usa por defecto [`ecmwf-datastores-client`](https://github.com/ecmwf/ecmwf-datastores-client), el cliente Python de ECMWF para la API de Data Stores, que aporta envío asíncrono de trabajos y comprobación de credenciales.
+
+ECMWF lo clasifica como **Incubating**: la interfaz es mayormente estable, pero recomiendan fijar una versión publicada y contar con cambios incompatibles. Por eso `requirements.txt` la fija a `>=0.5.1,<0.6`, y el CDS sigue soportando el cliente clásico `cdsapi` sin pedir migración.
+
+Para no depender de un paquete en incubación, `src/cds.py` aísla esa elección: si el cliente nuevo diese problemas, basta con
+
+```bash
+python src/download.py --start 1996 --end 2025 --block 3 --backend cdsapi
+```
+
+El backend `cdsapi` solo admite el modo síncrono; el resto del pipeline es idéntico.
 
 ---
 
@@ -128,8 +142,14 @@ Documentación oficial: https://cds.climate.copernicus.eu/how-to-api · https://
 ## Uso
 
 ```bash
+# Comprobar credenciales antes de una descarga larga
+python src/download.py --check-auth
+
 # Descarga por bloques de años (comprueba si el fichero ya existe)
 python src/download.py --start 1996 --end 2025 --block 3
+
+# Serie completa: encola varios bloques a la vez (recomendado)
+python src/download.py --start 1996 --end 2025 --block 3 --mode async
 
 # Análisis para un emplazamiento
 python src/analyze.py --site rello
@@ -141,7 +161,16 @@ python src/analyze.py --all
 python src/report.py
 ```
 
-Las colas del CDS pueden ser de horas. `download.py` es reanudable: si el bloque ya está descargado, lo omite.
+### Modos de descarga
+
+Las colas del CDS pueden ser de horas, y la serie 1996–2025 en bloques de 3 años son diez peticiones.
+
+- **`--mode sync`** (por defecto) descarga un bloque cada vez: espera a que termine el primero antes de pedir el segundo. Diez colas, una detrás de otra.
+- **`--mode async`** envía varios bloques de golpe —`--max-parallel`, 4 por defecto— y los descarga según van estando listos. El CDS los procesa en paralelo, así que las esperas se solapan en vez de sumarse.
+
+En ambos modos, un bloque ya descargado se omite. En modo asíncrono se guardan además los `request_id` en `data/raw/.jobs.json`: si se interrumpe el proceso, al relanzarlo se retoman los trabajos que siguen en cola en lugar de reenviarlos al final de la fila.
+
+`--check-auth` valida las credenciales contra la API sin descargar nada. Conviene usarlo antes de una serie larga: si los Términos de Uso del dataset no están aceptados, el script lo señala explícitamente en vez de dejar el error crudo de la API.
 
 ### Tests
 
@@ -150,7 +179,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-Cubren el cálculo de crepúsculos (`twilight.py`) y la clasificación de noches (`analyze.py`) con datos sintéticos, sin necesidad de credenciales del CDS ni de datos descargados.
+Cubren el cálculo de crepúsculos (`twilight.py`), la clasificación de noches (`analyze.py`), el registro de trabajos encolados (`jobs.py`) y ambos modos de descarga (`download.py`) con un backend simulado. No requieren credenciales del CDS ni datos descargados.
 
 ---
 
