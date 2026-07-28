@@ -1,0 +1,25 @@
+# Umbrales de las métricas nocturnas usadas en src/analyze.py.
+# Son parámetros, no constantes de código: cambiar aquí, no en el script.
+
+noche_aprovechable:
+  horas_consecutivas_min: 3
+  cobertura_total_max_pct: 40
+
+noche_despejada:
+  cobertura_media_max_pct: 20
+
+noche_fotometrica:
+  cobertura_media_max_pct: 10
+  nube_alta_max_pct: 10
+
+# Una noche se considera perdida si ninguna hora baja de este umbral
+# (mismo umbral que noche_aprovechable, expresado aparte para que ambas
+# lecturas del dato sean explícitas en la configuración).
+noche_perdida:
+  cobertura_total_max_pct: 40
+
+riesgo_rocio:
+  depresion_punto_rocio_max_c: 2
+
+cierre_por_viento:
+  racha_sostenida_min_kmh: 40

@@ -1,0 +1,21 @@
+# Datos crudos descargados de Copernicus CDS — se regeneran con src/download.py
+data/raw/*
+!data/raw/.gitkeep
+
+# Credenciales (viven en $HOME/.cdsapirc, nunca en el repo)
+.cdsapirc
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Sistema
+.DS_Store

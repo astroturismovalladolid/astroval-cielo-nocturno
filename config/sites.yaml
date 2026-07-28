@@ -1,0 +1,64 @@
+# Emplazamientos candidatos para observación astronómica.
+#
+# Las coordenadas con valor null están pendientes de verificación de campo;
+# analyze.py debe rechazar (o avisar) sobre cualquier sitio sin lat/lon.
+# altitude_m es informativa, no se usa en el cálculo de crepúsculos ni en
+# la selección de celda de rejilla (ERA5 es un modelo de superficie a 0,25°,
+# no resuelve la orografía fina).
+
+sites:
+  - id: rello
+    name: "Rello / Atalaya del Tiñón"
+    province: Soria
+    altitude_m: 1140
+    lat: 41.367
+    lon: -2.761
+    status: candidato_principal
+
+  - id: paramo_de_boedo
+    name: "Páramo de Boedo"
+    province: Palencia
+    altitude_m: 940
+    lat: 42.578
+    lon: -4.400
+    status: alternativa
+
+  - id: cembrero
+    name: "Cembrero (Villameriel)"
+    province: Palencia
+    altitude_m: 918
+    lat: null
+    lon: null
+    status: pendiente
+
+  - id: barcial_de_la_loma
+    name: "Barcial de la Loma"
+    province: Valladolid
+    altitude_m: 744
+    lat: 41.954
+    lon: -5.280
+    status: referencia_provincial
+
+  - id: uruena
+    name: "Urueña"
+    province: Valladolid
+    altitude_m: 840
+    lat: null
+    lon: null
+    status: referencia_provincial
+
+  - id: cerro_de_cuchillejo
+    name: "Cerro de Cuchillejo"
+    province: Valladolid
+    altitude_m: 932
+    lat: null
+    lon: null
+    status: techo_provincial
+
+  - id: bejar_la_covatilla
+    name: "Sierra de Béjar–La Covatilla"
+    province: Salamanca
+    altitude_m: 2000
+    lat: null
+    lon: null
+    status: control_vertiente_humeda

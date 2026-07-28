@@ -1,0 +1,43 @@
+# Parámetros de la descarga ERA5 (Climate Data Store).
+# src/download.py lee este fichero; no hardcodea el área, las variables
+# ni la ventana horaria.
+
+dataset: reanalysis-era5-single-levels
+
+product_type: reanalysis
+data_format: netcdf
+download_format: unarchived
+
+# North / West / South / East, en ese orden (formato del área del CDS).
+area: [43.5, -7.5, 39.75, -1.5]
+
+# Ventana horaria en UTC. Cubre la noche astronómica completa en Castilla
+# y León en cualquier época del año y reduce a la mitad el volumen de
+# descarga frente a pedir las 24 horas.
+hours:
+  - "18:00"
+  - "19:00"
+  - "20:00"
+  - "21:00"
+  - "22:00"
+  - "23:00"
+  - "00:00"
+  - "01:00"
+  - "02:00"
+  - "03:00"
+  - "04:00"
+  - "05:00"
+
+variables:
+  prioritarias:
+    - total_cloud_cover
+    - high_cloud_cover
+    - medium_cloud_cover
+    - low_cloud_cover
+  complementarias:
+    - 2m_temperature
+    - 2m_dewpoint_temperature
+    - 10m_u_component_of_wind
+    - 10m_v_component_of_wind
+    - total_column_water_vapour
+    - snow_depth
