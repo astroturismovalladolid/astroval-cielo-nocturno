@@ -1,7 +1,17 @@
 import pytest
 
+import datetime as dt
+
 import cds
-from download import run_async, run_sync, target_path, variables_for, year_blocks
+from download import (
+    block_availability,
+    preflight,
+    run_async,
+    run_sync,
+    target_path,
+    variables_for,
+    year_blocks,
+)
 from jobs import JobState
 
 DATASET = "reanalysis-era5-single-levels"
@@ -340,6 +350,151 @@ def test_run_async_rejects_backend_without_support(tmp_path):
             backend, DATASET, make_plan(tmp_path, 1), force=False, output_dir=tmp_path,
             max_parallel=2, poll_seconds=0,
         )
+
+
+# --- preflight ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "years, last_year, expected",
+    [
+        ([1996, 1997, 1998], 2025, "ok"),
+        ([2024, 2025, 2026], 2025, "partial"),
+        ([2026, 2027, 2028], 2025, "unavailable"),
+        ([2025], 2025, "ok"),
+        ([1996, 1997], None, "ok"),  # catálogo sin fecha de fin publicada
+    ],
+)
+def test_block_availability(years, last_year, expected):
+    assert block_availability(years, last_year) == expected
+
+
+class PreflightBackend(FakeBackend):
+    def __init__(self, end_year=2025, costs=None, window_error=None, costs_error=None):
+        super().__init__()
+        self._end_year = end_year
+        self._costs = costs if costs is not None else {"id": "size", "cost": 10, "limit": 100}
+        self._window_error = window_error
+        self._costs_error = costs_error
+        self.estimated = []
+
+    def collection_window(self, dataset):
+        if self._window_error:
+            raise self._window_error
+        end = None if self._end_year is None else dt.datetime(self._end_year, 12, 31)
+        return dt.datetime(1940, 1, 1), end
+
+    def estimate_costs(self, dataset, request):
+        self.estimated.append(request["year"])
+        if self._costs_error:
+            raise self._costs_error
+        return self._costs
+
+
+def _plan_for_years(tmp_path, groups):
+    return [
+        (tmp_path / f"era5_{g[0]}_all.nc", {"year": [str(y) for y in g]}) for g in groups
+    ]
+
+
+def test_preflight_drops_blocks_beyond_coverage(tmp_path):
+    backend = PreflightBackend(end_year=2025)
+    plan = _plan_for_years(tmp_path, [[2023, 2024, 2025], [2026, 2027, 2028]])
+
+    kept = preflight(backend, DATASET, plan)
+
+    assert [t.name for t, _ in kept] == ["era5_2023_all.nc"]
+
+
+def test_preflight_keeps_partial_block(tmp_path):
+    backend = PreflightBackend(end_year=2025)
+    plan = _plan_for_years(tmp_path, [[2024, 2025, 2026]])
+
+    assert len(preflight(backend, DATASET, plan)) == 1
+
+
+def test_preflight_drops_block_over_cost_limit(tmp_path):
+    backend = PreflightBackend(costs={"id": "size", "cost": 500, "limit": 100})
+    plan = _plan_for_years(tmp_path, [[1996, 1997, 1998]])
+
+    assert preflight(backend, DATASET, plan) == []
+
+
+def test_preflight_keeps_block_within_cost_limit(tmp_path):
+    backend = PreflightBackend(costs={"id": "size", "cost": 50, "limit": 100})
+    plan = _plan_for_years(tmp_path, [[1996, 1997, 1998]])
+
+    assert len(preflight(backend, DATASET, plan)) == 1
+
+
+def test_preflight_keeps_block_when_cost_shape_is_unknown(tmp_path):
+    """Ante una respuesta que no sabe leer, deja pasar en vez de bloquear."""
+    backend = PreflightBackend(costs={"formato": "inesperado"})
+    plan = _plan_for_years(tmp_path, [[1996, 1997, 1998]])
+
+    assert len(preflight(backend, DATASET, plan)) == 1
+
+
+def test_preflight_keeps_everything_if_catalogue_unreachable(tmp_path):
+    backend = PreflightBackend(window_error=RuntimeError("503"))
+    plan = _plan_for_years(tmp_path, [[1996, 1997, 1998], [2026, 2027, 2028]])
+
+    assert len(preflight(backend, DATASET, plan)) == 2
+
+
+def test_preflight_keeps_block_if_cost_estimate_fails(tmp_path):
+    backend = PreflightBackend(costs_error=RuntimeError("timeout"))
+    plan = _plan_for_years(tmp_path, [[1996, 1997, 1998]])
+
+    assert len(preflight(backend, DATASET, plan)) == 1
+
+
+def test_preflight_is_noop_on_backend_without_metadata(tmp_path):
+    backend = PreflightBackend(window_error=cds.UnsupportedOperation("sin catálogo"))
+    plan = _plan_for_years(tmp_path, [[2026, 2027, 2028]])
+
+    # No puede afirmar nada, así que no descarta nada.
+    assert len(preflight(backend, DATASET, plan)) == 1
+    assert backend.estimated == []
+
+
+def test_preflight_does_not_estimate_cost_of_discarded_block(tmp_path):
+    """Un bloque fuera de rango no gasta una llamada de estimación."""
+    backend = PreflightBackend(end_year=2025)
+    plan = _plan_for_years(tmp_path, [[2026, 2027, 2028]])
+
+    preflight(backend, DATASET, plan)
+
+    assert backend.estimated == []
+
+
+# --- interpretación del coste --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "costs, expected",
+    [
+        ({"id": "size", "cost": 10, "limit": 100}, "ok"),
+        ({"id": "size", "cost": 500, "limit": 100}, "exceeded"),
+        ({"id": "size", "cost": 100, "limit": 100}, "ok"),  # el límite es inclusivo
+        ({"size": {"cost": 500, "limit": 100}}, "exceeded"),  # forma anidada
+        ({"cost": 5, "limit": 0}, "unknown_or_ok"),  # límite 0: no se afirma nada
+        ({}, "unknown"),
+        ({"algo": "raro"}, "unknown"),
+        ({"cost": "mucho", "limit": 100}, "unknown"),
+    ],
+)
+def test_interpret_costs(costs, expected):
+    verdict, _ = cds.interpret_costs(costs)
+    if expected == "unknown_or_ok":
+        assert verdict != "exceeded"
+    else:
+        assert verdict == expected
+
+
+def test_interpret_costs_describes_the_numbers():
+    _, description = cds.interpret_costs({"id": "size", "cost": 500, "limit": 100})
+    assert "500" in description and "100" in description
 
 
 # --- backends -----------------------------------------------------------------

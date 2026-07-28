@@ -127,6 +127,8 @@ url: https://cds.climate.copernicus.eu/api
 key: <TOKEN-PERSONAL>
 ```
 
+El cliente busca las credenciales en tres sitios, por orden de precedencia: argumentos al construirlo, las variables de entorno `ECMWF_DATASTORES_URL` y `ECMWF_DATASTORES_KEY`, y por último el fichero. Las variables de entorno son la vía cómoda para ejecutar en un servidor o en CI sin dejar el token en disco.
+
 Si ya tienes un `$HOME/.cdsapirc` de antes (mismo formato), puedes reutilizarlo apuntando la variable de entorno `ECMWF_DATASTORES_RC_FILE` a esa ruta en lugar de duplicar el fichero.
 
 > **Este fichero nunca debe subirse al repositorio.** Vive fuera del proyecto, en el directorio de usuario.
@@ -144,6 +146,9 @@ Documentación oficial: https://cds.climate.copernicus.eu/how-to-api · https://
 ```bash
 # Comprobar credenciales antes de una descarga larga
 python src/download.py --check-auth
+
+# Ver los trabajos que hay encolados en el servidor
+python src/download.py --list-jobs
 
 # Descarga por bloques de años (comprueba si el fichero ya existe)
 python src/download.py --start 1996 --end 2025 --block 3
@@ -169,6 +174,19 @@ Las colas del CDS pueden ser de horas, y la serie 1996–2025 en bloques de 3 a�
 - **`--mode async`** envía varios bloques de golpe —`--max-parallel`, 4 por defecto— y los descarga según van estando listos. El CDS los procesa en paralelo, así que las esperas se solapan en vez de sumarse.
 
 En ambos modos, un bloque ya descargado se omite. En modo asíncrono se guardan además los `request_id` en `data/raw/.jobs.json`: si se interrumpe el proceso, al relanzarlo se retoman los trabajos que siguen en cola en lugar de reenviarlos al final de la fila.
+
+Si se pierde ese fichero, `--list-jobs` pregunta al servidor qué trabajos hay a nombre del usuario y devuelve sus `request_id`.
+
+En esperas largas, `--verbose` activa los mensajes del propio cliente (cambios de estado en la cola, reintentos), que son la única señal de avance mientras se espera.
+
+### Comprobaciones previas
+
+Una petición fuera de rango o demasiado grande no falla al enviarse: falla al procesarse, es decir **después de horas de cola**. Por eso antes de encolar nada se comprueban dos cosas, que cuestan un par de llamadas rápidas:
+
+- **Cobertura temporal.** Se consulta hasta qué fecha publica datos el dataset y se descartan los bloques enteramente posteriores. ERA5 lleva unos días de retraso respecto al presente, así que pedir el año en curso completo devuelve bloques vacíos.
+- **Coste de la petición.** El CDS rechaza peticiones que superan cierto tamaño. Un bloque de 3 años con las diez variables puede pasarse; se avisa por delante, sugiriendo `--block` más pequeño o `--variables prioritarias`.
+
+Ante cualquier duda —catálogo inaccesible, respuesta con un formato que no reconoce— el preflight deja pasar el bloque: es una ayuda, no un portero. Se desactiva con `--no-preflight`, y no se ejecuta con `--dry-run`.
 
 `--check-auth` valida las credenciales contra la API sin descargar nada. Conviene usarlo antes de una serie larga: si los Términos de Uso del dataset no están aceptados, el script lo señala explícitamente en vez de dejar el error crudo de la API.
 

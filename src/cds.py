@@ -92,6 +92,28 @@ class DatastoresBackend:
     def get_job(self, request_id: str) -> DatastoresJob:
         return DatastoresJob(self._client.get_remote(request_id))
 
+    def collection_window(self, dataset: str) -> tuple[Any, Any]:
+        """(inicio, fin) de la cobertura temporal del dataset. Pueden ser None."""
+        collection = self._client.get_collection(dataset)
+        return collection.begin_datetime, collection.end_datetime
+
+    def estimate_costs(self, dataset: str, request: dict) -> dict:
+        """Coste estimado de la petición, tal y como lo devuelve la API."""
+        return dict(self._client.get_collection(dataset).estimate_costs(request))
+
+    def apply_constraints(self, dataset: str, request: dict) -> dict:
+        """Recorta la petición a lo que el dataset ofrece realmente."""
+        return dict(self._client.apply_constraints(dataset, request))
+
+    def list_jobs(self, status: str | None = None) -> list[str]:
+        """request_id de los trabajos del usuario, recorriendo las páginas."""
+        jobs = self._client.get_jobs(sortby="-created", status=status)
+        request_ids: list[str] = []
+        while jobs is not None:
+            request_ids.extend(jobs.request_ids)
+            jobs = jobs.next
+        return request_ids
+
 
 class CdsapiBackend:
     """Backend sobre `cdsapi`, el cliente clásico. Solo modo síncrono."""
@@ -130,6 +152,26 @@ class CdsapiBackend:
             "de forma bloqueante."
         )
 
+    def collection_window(self, dataset: str) -> tuple[Any, Any]:
+        raise UnsupportedOperation(
+            "cdsapi no expone metadatos del catálogo; usa --backend datastores."
+        )
+
+    def estimate_costs(self, dataset: str, request: dict) -> dict:
+        raise UnsupportedOperation(
+            "cdsapi no expone estimación de coste; usa --backend datastores."
+        )
+
+    def apply_constraints(self, dataset: str, request: dict) -> dict:
+        raise UnsupportedOperation(
+            "cdsapi no expone las restricciones del dataset; usa --backend datastores."
+        )
+
+    def list_jobs(self, status: str | None = None) -> list[str]:
+        raise UnsupportedOperation(
+            "cdsapi no expone el listado de trabajos; usa --backend datastores."
+        )
+
 
 def get_backend(name: str = DATASTORES):
     """Instancia el backend pedido. Lanza ValueError si el nombre no existe."""
@@ -138,6 +180,41 @@ def get_backend(name: str = DATASTORES):
     if name == CDSAPI:
         return CdsapiBackend()
     raise ValueError(f"Backend desconocido: '{name}'. Disponibles: {', '.join(BACKENDS)}")
+
+
+def interpret_costs(costs: dict) -> tuple[str, str]:
+    """Traduce la estimación de coste a (veredicto, descripción).
+
+    El veredicto es "exceeded" solo cuando se puede determinar con certeza
+    que la petición supera el límite del CDS; si la forma de la respuesta
+    no se reconoce se devuelve "unknown" y la descripción cruda, para no
+    bloquear una descarga válida por no saber leer un formato nuevo.
+    """
+    if not isinstance(costs, dict) or not costs:
+        return "unknown", str(costs)
+
+    def pair(d: dict) -> tuple[float, float] | None:
+        cost, limit = d.get("cost"), d.get("limit")
+        if isinstance(cost, (int, float)) and isinstance(limit, (int, float)):
+            return float(cost), float(limit)
+        return None
+
+    found = pair(costs)
+    label = str(costs.get("id", "coste"))
+    if found is None:
+        for key, value in costs.items():
+            if isinstance(value, dict) and (found := pair(value)) is not None:
+                label = str(key)
+                break
+
+    if found is None:
+        return "unknown", str(costs)
+
+    cost, limit = found
+    description = f"{label}: {cost:g} de un límite de {limit:g}"
+    if limit > 0 and cost > limit:
+        return "exceeded", description
+    return "ok", description
 
 
 def looks_like_terms_error(message: str) -> bool:

@@ -28,6 +28,7 @@ bloques de uno en uno y es el recomendado para descargar la serie completa.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -80,6 +81,89 @@ def variables_for(cfg: dict, which: str) -> list[str]:
     if which not in all_vars:
         raise ValueError(f"Grupo de variables desconocido: '{which}'")
     return list(all_vars[which])
+
+
+def block_availability(years: list[int], last_available_year: int | None) -> str:
+    """Compara los años de un bloque con el final de la cobertura del dataset.
+
+    Devuelve "ok", "partial" (parte del bloque aún no existe) o "unavailable"
+    (el bloque entero está fuera del rango publicado).
+    """
+    if last_available_year is None:
+        return "ok"
+    if years[0] > last_available_year:
+        return "unavailable"
+    if years[-1] > last_available_year:
+        return "partial"
+    return "ok"
+
+
+def preflight(
+    backend, dataset: str, plan: list[tuple[Path, dict]]
+) -> list[tuple[Path, dict]]:
+    """Descarta bloques inviables antes de meterlos en la cola.
+
+    Una petición fuera de rango o demasiado grande no falla al enviarla:
+    falla al procesarse, es decir después de horas de cola. Comprobarlo por
+    delante cuesta un par de llamadas rápidas y ahorra esa espera.
+
+    Ante cualquier duda deja pasar el bloque: el preflight es una ayuda, no
+    un portero. Solo descarta lo que puede afirmar con certeza.
+    """
+    try:
+        _, end = backend.collection_window(dataset)
+    except cds.UnsupportedOperation as exc:
+        print(f"[preflight] omitido: {exc}", file=sys.stderr)
+        return plan
+    except Exception as exc:
+        print(f"[preflight] no se pudo consultar el catálogo: {exc}", file=sys.stderr)
+        return plan
+
+    last_year = end.year if end is not None else None
+    if last_year is not None:
+        print(f"[preflight] el dataset publica datos hasta {end:%Y-%m-%d}")
+
+    kept = []
+    for target, request in plan:
+        years = [int(y) for y in request["year"]]
+        status = block_availability(years, last_year)
+
+        if status == "unavailable":
+            print(
+                f"[preflight] {target.name} descartado: {years[0]}-{years[-1]} "
+                f"está por encima del último año publicado ({last_year})",
+                file=sys.stderr,
+            )
+            continue
+        if status == "partial":
+            print(
+                f"[preflight] {target.name}: el bloque llega a {years[-1]} pero el "
+                f"dataset acaba en {last_year}; se descargará lo disponible"
+            )
+
+        try:
+            verdict, description = cds.interpret_costs(
+                backend.estimate_costs(dataset, request)
+            )
+        except cds.UnsupportedOperation:
+            verdict, description = "unknown", ""
+        except Exception as exc:
+            verdict, description = "unknown", f"no se pudo estimar ({exc})"
+
+        if verdict == "exceeded":
+            print(
+                f"[preflight] {target.name} descartado: la petición supera el "
+                f"límite del CDS ({description}). Prueba con --block más pequeño "
+                "o --variables prioritarias.",
+                file=sys.stderr,
+            )
+            continue
+        if verdict == "ok":
+            print(f"[preflight] {target.name}: {description}")
+
+        kept.append((target, request))
+
+    return kept
 
 
 def _report_failure(target_name: str, exc: Exception) -> None:
@@ -259,14 +343,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Comprueba las credenciales contra la API y termina",
     )
     parser.add_argument(
+        "--list-jobs",
+        action="store_true",
+        help="Lista los trabajos encolados en el servidor y termina",
+    )
+    parser.add_argument(
+        "--no-preflight",
+        action="store_true",
+        help="No comprobar cobertura ni coste antes de encolar",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Muestra los mensajes del cliente (estado de cola, reintentos)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Muestra las peticiones sin llamar a la API del CDS",
     )
     args = parser.parse_args(argv)
 
-    if not args.check_auth and (args.start is None or args.end is None):
-        parser.error("--start y --end son obligatorios salvo con --check-auth")
+    solo_info = args.check_auth or args.list_jobs
+    if not solo_info and (args.start is None or args.end is None):
+        parser.error(
+            "--start y --end son obligatorios salvo con --check-auth o --list-jobs"
+        )
     if args.max_parallel < 1:
         parser.error("--max-parallel debe ser al menos 1")
 
@@ -275,6 +377,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+
+    if args.verbose:
+        # El cliente informa por logging del estado en cola y de los
+        # reintentos; en esperas de horas es la única señal de avance.
+        logging.basicConfig(level="INFO", format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.list_jobs:
+        try:
+            backend = cds.get_backend(args.backend)
+            request_ids = backend.list_jobs()
+        except (ImportError, cds.UnsupportedOperation) as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"No se pudo consultar la lista de trabajos: {exc}", file=sys.stderr)
+            return 1
+        if not request_ids:
+            print("No hay trabajos registrados en el servidor.")
+        else:
+            print(f"{len(request_ids)} trabajo(s), del más reciente al más antiguo:")
+            for request_id in request_ids:
+                print(f"  {request_id}")
+        return 0
 
     if args.check_auth:
         try:
@@ -323,6 +448,17 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError as exc:
         print(exc, file=sys.stderr)
         return 1
+
+    if not args.no_preflight:
+        # Solo se comprueban los bloques que realmente se van a pedir.
+        pendientes = [(t, r) for t, r in plan if not already_downloaded(t) or args.force]
+        if pendientes:
+            viables = {t.name for t, _ in preflight(backend, cfg["dataset"], pendientes)}
+            descartados = {t.name for t, _ in pendientes} - viables
+            plan = [(t, r) for t, r in plan if t.name not in descartados]
+            if not plan:
+                print("No queda ningún bloque que descargar.", file=sys.stderr)
+                return 1
 
     try:
         if args.mode == "async":
