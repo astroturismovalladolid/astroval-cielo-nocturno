@@ -2,7 +2,8 @@
 data/raw/*
 !data/raw/.gitkeep
 
-# Credenciales (viven en $HOME/.cdsapirc, nunca en el repo)
+# Credenciales (viven en $HOME/.ecmwfdatastoresrc, nunca en el repo)
+.ecmwfdatastoresrc
 .cdsapirc
 
 # Python

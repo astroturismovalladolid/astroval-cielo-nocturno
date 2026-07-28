@@ -95,8 +95,10 @@ astroval-cielo-nocturno/
 - Cuenta en el [Climate Data Store](https://cds.climate.copernicus.eu)
 
 ```bash
-pip install "cdsapi>=0.7.7" xarray netCDF4 pandas numpy astral matplotlib pyyaml
+pip install ecmwf-datastores-client xarray netCDF4 pandas numpy astral matplotlib pyyaml
 ```
+
+La descarga usa [`ecmwf-datastores-client`](https://github.com/ecmwf/ecmwf-datastores-client), el cliente Python oficial de ECMWF para la API de Data Stores (CDS incluido), sucesor de `cdsapi`. La petición y el método `retrieve()` son equivalentes a los de `cdsapi`, solo cambia el paquete y el fichero de credenciales.
 
 ---
 
@@ -104,12 +106,14 @@ pip install "cdsapi>=0.7.7" xarray netCDF4 pandas numpy astral matplotlib pyyaml
 
 ### 1. Credenciales
 
-Crear `$HOME/.cdsapirc` (en Windows, `C:\Users\<usuario>\.cdsapirc`) con el token personal que muestra el CDS al estar logueado:
+Crear `$HOME/.ecmwfdatastoresrc` (en Windows, `C:\Users\<usuario>\.ecmwfdatastoresrc`) con el token personal que muestra el CDS al estar logueado:
 
 ```
 url: https://cds.climate.copernicus.eu/api
 key: <TOKEN-PERSONAL>
 ```
+
+Si ya tienes un `$HOME/.cdsapirc` de antes (mismo formato), puedes reutilizarlo apuntando la variable de entorno `ECMWF_DATASTORES_RC_FILE` a esa ruta en lugar de duplicar el fichero.
 
 > **Este fichero nunca debe subirse al repositorio.** Vive fuera del proyecto, en el directorio de usuario.
 
@@ -117,7 +121,7 @@ key: <TOKEN-PERSONAL>
 
 Antes de la primera descarga hay que **aceptar manualmente los Términos de Uso del dataset**, al final del formulario de descarga en la web del CDS. Sin ese paso la API falla aunque las credenciales sean correctas. Es la causa más frecuente de error en el primer intento.
 
-Documentación oficial: https://cds.climate.copernicus.eu/how-to-api
+Documentación oficial: https://cds.climate.copernicus.eu/how-to-api · https://ecmwf.github.io/ecmwf-datastores-client/
 
 ---
 

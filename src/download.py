@@ -113,15 +113,16 @@ def main(argv: list[str] | None = None) -> int:
     client = None
     if not args.dry_run:
         try:
-            import cdsapi
+            from ecmwf.datastores import Client
         except ImportError:
             print(
-                "cdsapi no está instalado. Ejecuta 'pip install \"cdsapi>=0.7.7\"' "
-                "o usa --dry-run para ver las peticiones sin descargar.",
+                "ecmwf-datastores-client no está instalado. Ejecuta "
+                "'pip install ecmwf-datastores-client' o usa --dry-run para ver "
+                "las peticiones sin descargar.",
                 file=sys.stderr,
             )
             return 1
-        client = cdsapi.Client()
+        client = Client()
 
     for years in blocks:
         request = build_request(cfg, years, variables)

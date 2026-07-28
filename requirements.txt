@@ -1,4 +1,4 @@
-cdsapi>=0.7.7
+ecmwf-datastores-client
 xarray
 netCDF4
 pandas
